@@ -61,7 +61,7 @@ from typing import Optional
 from loguru import logger
 
 from execution.risk import risk_manager, vol_monitor
-from config import MAX_NET_DIRECTIONAL, BANKROLL
+from config import MAX_NET_DIRECTIONAL, BANKROLL, TAKER_FEE
 
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -200,13 +200,17 @@ class PositionManager:
         sl_dist = self._compute_sl_distance(atr, sweep_depth, regime)
 
         # ── Compute trigger prices ───────────────────────────────────
+        # Ensure TP clears worst-case round-trip execution costs + slippage buffer
+        min_tp_dist = entry_price * (TAKER_FEE * 3.0)
+        tp_dist = max(sl_dist * MIN_RR_RATIO, min_tp_dist)
+
         if direction == 'long':
             sl_price  = entry_price - sl_dist
-            tp_price  = entry_price + (sl_dist * MIN_RR_RATIO)
+            tp_price  = entry_price + tp_dist
             liq_price = entry_price * (1 - (1 / leverage) * 0.85)
         else:
             sl_price  = entry_price + sl_dist
-            tp_price  = entry_price - (sl_dist * MIN_RR_RATIO)
+            tp_price  = entry_price - tp_dist
             liq_price = entry_price * (1 + (1 / leverage) * 0.85)
 
         # ── Liquidation guard: skip if SL is deeper than liq ────────
@@ -474,7 +478,7 @@ class PositionManager:
         pos_id: str,
         exit_price: float,
         slippage: float = 0.0,
-        fee_pct: float = 0.00035,  # Hyperliquid default taker fee
+        fee_pct: float = TAKER_FEE,
     ) -> Optional[dict]:
         """
         Record a closed position. Called AFTER the exchange close is confirmed.
