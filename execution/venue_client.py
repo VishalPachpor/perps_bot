@@ -99,6 +99,96 @@ class HyperliquidClient:
             logger.error(f'[VENUE] Market order exception: {e}')
             return {'success': False, 'order_id': '', 'filled_price': 0.0, 'reason': str(e)}
 
+    # ── Limit Order (Maker) ──────────────────────────────────────────
+    def limit_order(
+        self,
+        symbol: str,
+        is_buy: bool,
+        size: float,
+        limit_px: float,
+        post_only: bool = True
+    ) -> dict:
+        """Place a Maker Limit Order to earn the spread/avoid taker fees."""
+        side_str = 'BUY' if is_buy else 'SELL'
+        if self._paper:
+            oid = f'paper_limit_{symbol}_{side_str}_{int(time.time()*1000)}'
+            logger.info(f'[VENUE-PAPER] Limit {side_str} {size:.4f} {symbol} @ {limit_px:.4f} (Alo={post_only})')
+            # Simulated paper order fills 100% instantly for ease unless a robust sim is built
+            return {'success': True, 'order_id': oid, 'reason': 'paper'}
+
+        try:
+            # tif: 'Alo' = Add liquidity only (Post-only), 'Gtc' = Good til cancelled
+            order_type = {"limit": {"tif": "Alo" if post_only else "Gtc"}}
+            
+            result = self.exchange.order(
+                name=symbol,
+                is_buy=is_buy,
+                sz=round(size, 4),
+                limit_px=limit_px,
+                order_type=order_type,
+                reduce_only=False
+            )
+            status = result.get('status', 'unknown')
+            if status == 'ok':
+                filled = result['response']['data']['statuses'][0]
+                oid = filled.get('resting', {}).get('oid')
+                if not oid:
+                    oid = filled.get('filled', {}).get('oid', 'filled')
+                logger.info(f'[VENUE] Limit {side_str} {size:.4f} {symbol} @ {limit_px:.4f} — {oid}')
+                return {'success': True, 'order_id': str(oid), 'reason': 'ok'}
+            else:
+                reason = str(result)
+                logger.error(f'[VENUE] Limit order failed: {reason}')
+                return {'success': False, 'order_id': '', 'reason': reason}
+        except Exception as e:
+            logger.error(f'[VENUE] Limit order exception: {e}')
+            return {'success': False, 'order_id': '', 'reason': str(e)}
+
+    # ── Order Management ─────────────────────────────────────────────
+    def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Cancel an existing order by its ID."""
+        if self._paper or order_id.startswith('paper_'):
+            logger.info(f'[VENUE-PAPER] Cancel {symbol} order {order_id}')
+            return {'success': True, 'reason': 'paper'}
+            
+        if not order_id or not order_id.isdigit():
+            return {'success': True, 'reason': 'already_filled_or_invalid'}
+            
+        try:
+            result = self.exchange.cancel(name=symbol, oid=int(order_id))
+            status = result.get('status', 'unknown')
+            if status == 'ok':
+                logger.info(f'[VENUE] Cancelled {symbol} limit order {order_id}')
+                return {'success': True, 'reason': 'ok'}
+            else:
+                return {'success': False, 'reason': str(result)}
+        except Exception as e:
+            logger.error(f'[VENUE] Cancel order exception: {e}')
+            return {'success': False, 'reason': str(e)}
+
+    def get_order_status(self, symbol: str, order_id: str) -> dict:
+        """Check order status: 'open', 'filled', 'canceled', 'unknown'"""
+        if self._paper or order_id.startswith('paper_'):
+             return {'status': 'filled', 'filled_size': 0.0, 'avg_price': 0.0} # simulate fill immediately for limit
+             
+        if not order_id or not order_id.isdigit():
+             return {'status': 'filled', 'filled_size': 0.0, 'avg_price': 0.0}
+             
+        try:
+            res = self.info.query_order_by_oid(HL_WALLET_ADDR, int(order_id))
+            if isinstance(res, dict) and 'order' in res:
+                order_data = res['order'].get('order', {})
+                status = res['order'].get('status', 'unknown').lower()
+                sz = float(order_data.get('origSz', 0.0))
+                remaining = float(order_data.get('sz', 0.0))
+                filled_size = sz - remaining
+                return {'status': status, 'filled_size': filled_size, 'avg_price': float(order_data.get('limitPx', 0))}
+                
+            return {'status': 'unknown', 'filled_size': 0.0, 'avg_price': 0.0}
+        except Exception as e:
+            logger.error(f'[VENUE] Get order status exception: {e}')
+            return {'status': 'unknown', 'filled_size': 0.0, 'avg_price': 0.0}
+
     # ── Close Position (Market) ──────────────────────────────────────
     def close_position(
         self,

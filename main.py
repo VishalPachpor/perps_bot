@@ -61,25 +61,81 @@ async def execute_and_register_trade(symbol, direction, size_usd, mark_price, at
     """Background task to execute trade and register position without blocking the scan loop."""
     try:
         is_buy = (direction == 'long')
-        coin_size = size_usd / mark_price if mark_price > 0 else 0.0
-
-        # Simulate async delay or use real async client if available (wrapper for sync call)
-        # Using loop.run_in_executor to ensure the synchronous venue.market_order doesn't block the async loop
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, venue.market_order, symbol, is_buy, coin_size)
         
-        if not result['success']:
-            logger.error(f'[EXEC] Order failed for {symbol}: {result["reason"]}')
-            return
+        # Get inside spread to act as Maker
+        state = buffer.snapshot(symbol)
+        best_bid = state.get('best_bid', mark_price)
+        best_ask = state.get('best_ask', mark_price)
+        limit_px = best_bid if is_buy else best_ask
+        if limit_px <= 0:
+            limit_px = mark_price
+            
+        coin_size = size_usd / limit_px if limit_px > 0 else 0.0
 
-        fill_price = result.get('filled_price') or mark_price
+        loop = asyncio.get_event_loop()
+        
+        # 1. Place Post-Only Limit Order
+        logger.info(f'[EXEC] {symbol} routing Maker limit at {limit_px:.4f}')
+        result = await loop.run_in_executor(None, venue.limit_order, symbol, is_buy, coin_size, limit_px, True)
+        
+        filled_size = 0.0
+        avg_px = limit_px
+        
+        if result['success']:
+            oid = result['order_id']
+            # 2. Wait up to 5 seconds
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+                if status['status'] == 'filled':
+                    break
+            
+            status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+            filled_size = status.get('filled_size', 0.0)
+            if status.get('avg_price', 0.0) > 0:
+                avg_px = status['avg_price']
+                
+            # If partially unfilled or open
+            if status['status'] != 'filled' and filled_size < coin_size - 0.0001:
+                # Cancel remaining
+                await loop.run_in_executor(None, venue.cancel_order, symbol, oid)
+                
+                # Fetch final status after cancellation
+                status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+                filled_size = status.get('filled_size', 0.0)
+                
+                remaining_size = coin_size - filled_size
+                if remaining_size > (size_usd * 0.01 / limit_px): # at least 1% of required trade
+                    logger.info(f'[EXEC] {symbol} limit unfilled. Routing remaining {remaining_size:.4f} to market taker.')
+                    mkt_res = await loop.run_in_executor(None, venue.market_order, symbol, is_buy, remaining_size)
+                    if mkt_res['success']:
+                        mkt_price = mkt_res.get('filled_price', mark_price)
+                        total_size = filled_size + remaining_size
+                        if total_size > 0:
+                            avg_px = ((filled_size * avg_px) + (remaining_size * mkt_price)) / total_size
+                            filled_size = total_size
+
+            if filled_size <= 0:
+                logger.error(f'[EXEC] {symbol} order entirely failed/unfilled.')
+                return
+        else:
+            # Fallback direct market
+            logger.warning(f'[EXEC] Maker limit failed on submission ({result.get("reason")}). Fallback to Market.')
+            mkt_res = await loop.run_in_executor(None, venue.market_order, symbol, is_buy, coin_size)
+            if not mkt_res['success']:
+                return
+            avg_px = mkt_res.get('filled_price', mark_price)
+            filled_size = coin_size
+
+        fill_price = avg_px
+        actual_size_usd = filled_size * fill_price
 
         # Register position
         pos_id = position_manager.open_position(
             symbol=symbol,
             direction=direction,
             entry_price=fill_price,
-            size_usd=size_usd,
+            size_usd=actual_size_usd,
             leverage=MAX_LEVERAGE,
             atr=atr,
             regime=regime,
@@ -90,10 +146,10 @@ async def execute_and_register_trade(symbol, direction, size_usd, mark_price, at
         )
 
         if not pos_id:
-            await loop.run_in_executor(None, venue.close_position, symbol, not is_buy, coin_size)
+            await loop.run_in_executor(None, venue.close_position, symbol, not is_buy, filled_size)
             return
 
-        risk_manager.record_open(symbol, size_usd)
+        risk_manager.record_open(symbol, actual_size_usd)
 
         open_positions = position_manager.get_open_positions()
         pos_info = next((p for p in open_positions if p['pos_id'] == pos_id), {})
@@ -102,7 +158,7 @@ async def execute_and_register_trade(symbol, direction, size_usd, mark_price, at
         asyncio.create_task(telegram.notify_open(
             symbol, direction,
             entry=fill_price,
-            size=size_usd,
+            size=actual_size_usd,
             sl=pos_info.get('sl_price', 0),
             tp=pos_info.get('tp_price', 0),
             reason=scan_data.get('score', ''),
@@ -110,7 +166,7 @@ async def execute_and_register_trade(symbol, direction, size_usd, mark_price, at
 
         log_trade({
             'event': 'open', 'symbol': symbol, 'direction': direction,
-            'entry_price': fill_price, 'size_usd': size_usd,
+            'entry_price': fill_price, 'size_usd': actual_size_usd,
             'regime': regime, 'signal_score': scan_data.get('score'),
             'pos_id': pos_id,
         })
@@ -136,11 +192,65 @@ async def execute_and_register_close(symbol, direction, coin_size, mark_price, e
     """Background task to execute trade exit and register outcome without blocking the monitor loop."""
     try:
         is_buy = (direction == 'short')  # closing a short = buy
+        
+        state = buffer.snapshot(symbol)
+        best_bid = state.get('best_bid', mark_price)
+        best_ask = state.get('best_ask', mark_price)
+        limit_px = best_bid if is_buy else best_ask
+        if limit_px <= 0:
+            limit_px = mark_price
+
         loop = asyncio.get_event_loop()
         
-        # Dispatch blocking REST call to thread pool
-        result = await loop.run_in_executor(None, venue.close_position, symbol, is_buy, coin_size)
-        fill = result.get('filled_price') or mark_price
+        # 1. Place Post-Only Limit Order
+        logger.info(f'[EXEC] {symbol} routing Maker limit close at {limit_px:.4f}')
+        result = await loop.run_in_executor(None, venue.limit_order, symbol, is_buy, coin_size, limit_px, True)
+        
+        filled_size = 0.0
+        avg_px = limit_px
+        
+        if result['success']:
+            oid = result['order_id']
+            # 2. Wait 5s
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+                if status['status'] == 'filled':
+                    break
+            
+            status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+            filled_size = status.get('filled_size', 0.0)
+            if status.get('avg_price', 0.0) > 0:
+                avg_px = status['avg_price']
+                
+            if status['status'] != 'filled' and filled_size < coin_size - 0.0001:
+                await loop.run_in_executor(None, venue.cancel_order, symbol, oid)
+                status = await loop.run_in_executor(None, venue.get_order_status, symbol, oid)
+                filled_size = status.get('filled_size', 0.0)
+                
+                remaining = coin_size - filled_size
+                if remaining > (coin_size * 0.01):
+                    logger.info(f'[EXEC] {symbol} limit close unfilled. Force market for {remaining:.4f}')
+                    mkt_res = await loop.run_in_executor(None, venue.close_position, symbol, is_buy, remaining)
+                    if mkt_res.get('success'):
+                        mkt_px = mkt_res.get('filled_price', mark_price)
+                        total = filled_size + remaining
+                        if total > 0:
+                            avg_px = ((filled_size * avg_px) + (remaining * mkt_px)) / total
+                        filled_size = total
+
+            if filled_size <= 0:
+                logger.error(f'[EXEC] {symbol} close order entirely failed.')
+                return
+        else:
+            logger.warning(f'[EXEC] Maker limit close failed ({result.get("reason")}). Fallback market.')
+            mkt_res = await loop.run_in_executor(None, venue.close_position, symbol, is_buy, coin_size)
+            if not mkt_res.get('success'):
+                return
+            avg_px = mkt_res.get('filled_price') or mark_price
+            filled_size = coin_size
+
+        fill = avg_px
 
         # Register closure locally
         pos_id = exit_event['pos_id']
