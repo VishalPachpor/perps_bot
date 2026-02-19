@@ -1,15 +1,38 @@
 .env
+.video_feed_url
+
+# Logs and Data
+logs/
+*.log
+data/*.csv
+data/*.jsonl
+data/buffer_snapshot.json
+# Keep adaptive_weights.json as it's the learned model state
+# data/adaptive_weights.json
+
+# Dashboard State
+dashboard/.dashboard_state.json
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-.DS_Store
-logs/
-data/failure_patterns.jsonl
-data/*.jsonl
 .pytest_cache/
-*.egg-info/
+.coverage
+htmlcov/
 dist/
 build/
+*.egg-info/
+
+# Virtual Environments
 .venv/
 venv/
-.env.example 
+env/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Example Env (Should be committed)
+.env.example
