@@ -317,30 +317,33 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
     )
 
     # ── Quality Gate (Adaptive Thresholding — Prop Desk Upgrade) ───────
-    # Instead of static threshold, use rolling 70th percentile.
-    # Hard floor of 25 to prevent garbage trades in quiet markets.
+    # Rolling 70th percentile with a floor calibrated for quiet regimes.
+    # Floor = 20 (was 25) — at avg TQS 18.6, floor 25 blocks everything.
     if not hasattr(run_scan, '_tqs_history'):
         run_scan._tqs_history = []
-    
+
     run_scan._tqs_history.append(tqs)
-    # Keep last 1000 scores
     if len(run_scan._tqs_history) > 1000:
         run_scan._tqs_history = run_scan._tqs_history[-1000:]
 
     if len(run_scan._tqs_history) >= 50:
-        MIN_TQS = max(25.0, float(np.percentile(run_scan._tqs_history, 70)))
+        MIN_TQS = max(20.0, float(np.percentile(run_scan._tqs_history, 70)))
     else:
-        MIN_TQS = 35.0  # Fallback until enough history
-    
-    if tqs < MIN_TQS:
-        # Log why we are skipping - helpful for tuning
-        if tqs > 20: 
-            logger.debug(f"[SCAN] Skip {symbol}: TQS {tqs:.1f}/{MIN_TQS:.1f} (mtf={mtf_val:.2f} ofi={ofi_val:.2f})")
-            
+        MIN_TQS = 30.0  # Fallback until enough history (was 35)
+
+    # Fix 3: Factor visibility — log per-factor contributions each scan
+    logger.debug(
+        f"[FACTORS] {symbol}: mtf={mtf_val:.2f} ofi={ofi_val:.2f} cvd={cvd_val:.2f} "
+        f"sweep={sweep_val:.2f} liq={liquidity_val:.2f} vol={vol_val:.2f} "
+        f"corr={corr_val:.2f} sig={sig_str_val:.2f} exec={exec_val:.2f} → TQS={tqs:.1f}/{MIN_TQS:.1f}"
+    )
+
+    # Fix 2: Use <= so exact threshold ties trigger (not silently skipped)
+    if tqs <= MIN_TQS:
         return {
             'trade': False, 'symbol': symbol, 'direction': direction,
-            'score': f'{legacy_score:.1f}', 
-            'reason': f'TQS {tqs:.1f} < {MIN_TQS:.1f} (Quality Low)',
+            'score': f'{legacy_score:.1f}',
+            'reason': f'TQS {tqs:.1f} ≤ {MIN_TQS:.1f} (Quality Low)',
             'vol_expanding': vol_expanding, 'atr': atr,
             'cycle_ms': round((time.time() - t0) * 1000, 1),
             'raw_factors': raw_factors,
