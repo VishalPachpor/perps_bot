@@ -57,6 +57,129 @@ from signals.adaptive_weights import update_weights
 from execution.trade_logger import log_trade_entry, log_trade_exit
 
 # ── Scan + Execute ────────────────────────────────────────────────────
+async def execute_and_register_trade(symbol, direction, size_usd, mark_price, atr, regime, scan_data):
+    """Background task to execute trade and register position without blocking the scan loop."""
+    try:
+        is_buy = (direction == 'long')
+        coin_size = size_usd / mark_price if mark_price > 0 else 0.0
+
+        # Simulate async delay or use real async client if available (wrapper for sync call)
+        # Using loop.run_in_executor to ensure the synchronous venue.market_order doesn't block the async loop
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, venue.market_order, symbol, is_buy, coin_size)
+        
+        if not result['success']:
+            logger.error(f'[EXEC] Order failed for {symbol}: {result["reason"]}')
+            return
+
+        fill_price = result.get('filled_price') or mark_price
+
+        # Register position
+        pos_id = position_manager.open_position(
+            symbol=symbol,
+            direction=direction,
+            entry_price=fill_price,
+            size_usd=size_usd,
+            leverage=MAX_LEVERAGE,
+            atr=atr,
+            regime=regime,
+            signal_type=scan_data.get('score', ''),
+            session=scan_data.get('session', ''),
+            funding_rate=scan_data.get('funding_rate', 0.0),
+            sweep_depth=scan_data.get('sweep_depth', 0.0),
+        )
+
+        if not pos_id:
+            await loop.run_in_executor(None, venue.close_position, symbol, not is_buy, coin_size)
+            return
+
+        risk_manager.record_open(symbol, size_usd)
+
+        open_positions = position_manager.get_open_positions()
+        pos_info = next((p for p in open_positions if p['pos_id'] == pos_id), {})
+        
+        # Fire off notification silently
+        asyncio.create_task(telegram.notify_open(
+            symbol, direction,
+            entry=fill_price,
+            size=size_usd,
+            sl=pos_info.get('sl_price', 0),
+            tp=pos_info.get('tp_price', 0),
+            reason=scan_data.get('score', ''),
+        ))
+
+        log_trade({
+            'event': 'open', 'symbol': symbol, 'direction': direction,
+            'entry_price': fill_price, 'size_usd': size_usd,
+            'regime': regime, 'signal_score': scan_data.get('score'),
+            'pos_id': pos_id,
+        })
+        
+        # Quant Log Entry Factors
+        raw_factors = scan_data.get('raw_factors', {})
+        raw_factors.update({
+            'symbol': symbol,
+            'direction': direction,
+            'regime': regime,
+            'session': scan_data.get('session', ''),
+            'spread_at_entry': scan_data.get('spread', 0),
+            'entry_price': fill_price,
+            'signal_strength': scan_data.get('raw_factors', {}).get('signal_strength', 0),
+        })
+        log_trade_entry(pos_id, raw_factors)
+
+    except Exception as e:
+        logger.error(f'[EXEC] Async execution failed for {symbol}: {e}')
+
+
+async def execute_and_register_close(symbol, direction, coin_size, mark_price, exit_event):
+    """Background task to execute trade exit and register outcome without blocking the monitor loop."""
+    try:
+        is_buy = (direction == 'short')  # closing a short = buy
+        loop = asyncio.get_event_loop()
+        
+        # Dispatch blocking REST call to thread pool
+        result = await loop.run_in_executor(None, venue.close_position, symbol, is_buy, coin_size)
+        fill = result.get('filled_price') or mark_price
+
+        # Register closure locally
+        pos_id = exit_event['pos_id']
+        record = position_manager.close_position(
+            pos_id=pos_id,
+            exit_price=fill,
+            slippage=abs(fill - mark_price) / mark_price if fill != mark_price and mark_price > 0 else 0,
+        )
+
+        if record:
+            risk_manager.record_outcome(symbol, record.get('realized_pnl', 0))
+            
+            asyncio.create_task(telegram.notify_close(
+                symbol, direction,
+                pnl=record['realized_pnl'],
+                reason=exit_event['reason'],
+            ))
+            
+            log_trade({**record, 'event': 'close'})
+            
+            # Quant Log Exit Result
+            expected_risk = BANKROLL * RISK_PER_TRADE_PCT
+            if expected_risk > 0:
+                r_multiple = record.get('realized_pnl', 0) / expected_risk
+            else:
+                r_multiple = 0.0
+                
+            log_trade_exit(
+                pos_id=pos_id,
+                result_r=r_multiple,
+                exit_reason=exit_event['reason'],
+                exit_price=fill,
+                hold_time=record.get('hold_seconds', 0)
+            )
+
+    except Exception as e:
+        logger.error(f'[EXEC] Async close failed for {symbol}: {e}')
+
+
 async def scan_and_execute():
     """Main scan loop — runs every SCAN_INTERVAL seconds per symbol."""
     from signals.scanner import run_scan
@@ -120,73 +243,16 @@ async def scan_and_execute():
                     logger.debug(f'[EXEC] {symbol} size ${size_usd:.2f} too small — skip')
                     continue
 
-                # ── Place order ──────────────────────────────────────
-                direction  = scan['direction']
-                is_buy     = (direction == 'long')
-                coin_size  = size_usd / mark_price if mark_price > 0 else 0.0
-
-                result = venue.market_order(symbol, is_buy, coin_size)
-                if not result['success']:
-                    logger.error(f'[EXEC] Order failed: {result["reason"]}')
-                    continue
-
-                fill_price = result.get('filled_price') or mark_price
-
-                # ── Register position ────────────────────────────────
-                pos_id = position_manager.open_position(
+                # ── Dispatch async execution ────────────────────────────
+                asyncio.create_task(execute_and_register_trade(
                     symbol=symbol,
                     direction=direction,
-                    entry_price=fill_price,
                     size_usd=size_usd,
-                    leverage=MAX_LEVERAGE,
+                    mark_price=mark_price,
                     atr=atr,
                     regime=regime,
-                    signal_type=scan.get('score', ''),
-                    session=scan.get('session', ''),
-                    funding_rate=scan.get('funding_rate', 0.0),
-                    sweep_depth=scan.get('sweep_depth', 0.0),
-                )
-
-                if not pos_id:
-                    # Position manager rejected (likely duplicate or exposure cap)
-                    venue.close_position(symbol, not is_buy, coin_size)
-                    continue
-
-                risk_manager.record_open(symbol, size_usd)
-
-                # ── Notify ───────────────────────────────────────────
-                open_positions = position_manager.get_open_positions()
-                pos_info = next((p for p in open_positions if p['pos_id'] == pos_id), {})
-                asyncio.create_task(telegram.notify_open(
-                    symbol, direction,
-                    entry=fill_price,
-                    size=size_usd,
-                    sl=pos_info.get('sl_price', 0),
-                    tp=pos_info.get('tp_price', 0),
-                    reason=scan.get('score', ''),
+                    scan_data=scan
                 ))
-
-                log_trade({
-                    'event': 'open', 'symbol': symbol, 'direction': direction,
-                    'entry_price': fill_price, 'size_usd': size_usd,
-                    'regime': regime, 'signal_score': scan.get('score'),
-                    'pos_id': pos_id,
-                })
-                
-                # ── Quant Log Entry Factors ────────────────────────────
-                # Capture factors for adaptive learning
-                raw_factors = scan.get('raw_factors', {})
-                # Add metadata not in raw_factors
-                raw_factors.update({
-                    'symbol': symbol,
-                    'direction': direction,
-                    'regime': regime,
-                    'session': scan.get('session', ''),
-                    'spread_at_entry': scan.get('spread', 0),
-                    'entry_price': fill_price,
-                    'signal_strength': scan.get('raw_factors', {}).get('signal_strength', 0), # Ensure it's there
-                })
-                log_trade_entry(pos_id, raw_factors)
 
         except Exception as e:
             logger.exception(f'[SCAN] Unhandled error: {e}')
@@ -227,47 +293,14 @@ async def monitor_positions():
                     is_buy    = (direction == 'short')  # closing a short = buy
                     coin_size = exit_event['size_usd'] / mark_price
 
-                    result = venue.close_position(symbol, is_buy, coin_size)
-                    fill   = result.get('filled_price') or mark_price
-
-                    record = position_manager.close_position(
-                        pos_id=pos_id,
-                        exit_price=fill,
-                        slippage=abs(fill - mark_price) / mark_price if fill != mark_price else 0,
-                    )
-
-                    if record:
-                        risk_manager.record_outcome(symbol, record.get('realized_pnl', 0))
-                        asyncio.create_task(telegram.notify_close(
-                            symbol, direction,
-                            pnl=record['realized_pnl'],
-                            reason=exit_event['reason'],
-                        ))
-                        log_trade({**record, 'event': 'close'})
-                        
-                        # ── Quant Log Exit Result ──────────────────────
-                        r_multiple = 0.0
-                        risk_amount = record.get('size_usd', 0) * 0.01 # Approx risk if fixed %
-                        # Better calculation: R = PnL / (Entry - SL) * Size? 
-                        # Or simply PnL / Initial Risk USD.
-                        # For now, let's assume risk was ~1% of bankroll or use PnL directly if units differ.
-                        # User spec: "result_r = pnl / risk".
-                        # Let's approximate risk as 1% of Size (since we don't store exact risk amount easily here without lookups).
-                        # Actually risk_manager knows risk setting. 
-                        # RISK_PER_TRADE_PCT * BANKROLL is the intended risk.
-                        expected_risk = BANKROLL * RISK_PER_TRADE_PCT
-                        if expected_risk > 0:
-                            r_multiple = record.get('realized_pnl', 0) / expected_risk
-                        else:
-                            r_multiple = 0.0
-                            
-                        log_trade_exit(
-                            pos_id=pos_id,
-                            result_r=r_multiple,
-                            exit_reason=exit_event['reason'],
-                            exit_price=fill,
-                            hold_time=record.get('hold_seconds', 0)
-                        )
+                    # Dispatch async execution
+                    asyncio.create_task(execute_and_register_close(
+                        symbol=symbol,
+                        direction=direction,
+                        coin_size=coin_size,
+                        mark_price=mark_price,
+                        exit_event=exit_event
+                    ))
 
         except Exception as e:
             logger.exception(f'[MONITOR] Error: {e}')
