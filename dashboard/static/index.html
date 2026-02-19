@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Perps Trading Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css?v=3" />
+</head>
+
+<body>
+  <!-- ── Top bar ──────────────────────────────────────────── -->
+  <header class="top-bar">
+    <div class="logo">
+      <span class="logo-icon">🚀</span>
+      <span class="logo-text">HYPERLIQUID</span>
+      <span class="logo-sub">PERPS BOT</span>
+    </div>
+    <div class="status-badges">
+      <span class="badge badge-ws" id="ws-badge">● Connecting</span>
+      <span class="badge badge-mode" id="mode-badge">PAPER</span>
+      <span class="badge badge-time" id="time-badge">--:--:--</span>
+    </div>
+  </header>
+
+  <!-- ── Asset Selector ───────────────────────────────────── -->
+  <div class="asset-selector">
+    <button class="asset-tab active-tab" data-asset="ETH" onclick="switchAsset('ETH')">ETH</button>
+    <button class="asset-tab" data-asset="BTC" onclick="switchAsset('BTC')">BTC</button>
+    <button class="asset-tab" data-asset="SOL" onclick="switchAsset('SOL')">SOL</button>
+  </div>
+
+  <main class="dashboard">
+    <!-- ── Row 1: Market + PnL ────────────────────────────── -->
+    <section class="row row-hero">
+      <div class="card card-market" id="market-card">
+        <div class="card-header">
+          <span class="card-icon">📊</span>
+          <span class="card-title">Active Market</span>
+          <span class="tag tag-live" id="market-status">LIVE</span>
+        </div>
+
+        <div class="price-display">
+          <div class="price-main">
+            <span class="price-label">Mark Price</span>
+            <span class="price-value large" id="mark-price">--</span>
+          </div>
+          <div class="price-main">
+            <span class="price-label">Funding Rate</span>
+            <span class="price-value" id="funding-rate">--</span>
+          </div>
+        </div>
+        <div class="market-meta">
+          <span>Trades: </span>
+          <span id="trade-count-display">0</span>
+        </div>
+      </div>
+
+      <div class="card card-pnl">
+        <div class="card-header">
+          <span class="card-icon">💰</span>
+          <span class="card-title">Performance</span>
+        </div>
+        <div class="pnl-grid">
+          <div class="pnl-item">
+            <span class="pnl-label">Daily PnL</span>
+            <span class="pnl-value" id="daily-pnl">$0.00</span>
+          </div>
+          <div class="pnl-item">
+            <span class="pnl-label">Scans</span>
+            <span class="pnl-value pnl-neutral" id="scan-count">0</span>
+          </div>
+          <div class="pnl-item">
+            <span class="pnl-label">Latency</span>
+            <span class="pnl-value pnl-neutral" id="latency">0ms</span>
+          </div>
+          <div class="pnl-item">
+            <span class="pnl-label">Score</span>
+            <span class="pnl-value pnl-neutral" id="last-score">0</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Row 2: Signal Layers ───────────────────────────── -->
+    <section class="row row-signals">
+      <div class="card card-signals">
+        <div class="card-header">
+          <span class="card-icon">📡</span>
+          <span class="card-title">Signal Layers</span>
+        </div>
+        <div class="signals-grid">
+          <div class="signal-gauge" id="gauge-mtf">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                <circle class="gauge-fill" cx="50" cy="50" r="40" id="gauge-fill-mtf" />
+              </svg>
+              <span class="gauge-value" id="gauge-val-mtf">—</span>
+            </div>
+            <span class="gauge-label">MTF</span>
+            <span class="gauge-sub" id="gauge-sub-mtf">Multi-Timeframe</span>
+          </div>
+          <div class="signal-gauge" id="gauge-ofi">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                <circle class="gauge-fill" cx="50" cy="50" r="40" id="gauge-fill-ofi" />
+              </svg>
+              <span class="gauge-value" id="gauge-val-ofi">0</span>
+            </div>
+            <span class="gauge-label">OFI</span>
+            <span class="gauge-sub">Order Flow</span>
+          </div>
+          <div class="signal-gauge" id="gauge-corr">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                <circle class="gauge-fill" cx="50" cy="50" r="40" id="gauge-fill-corr" />
+              </svg>
+              <span class="gauge-value" id="gauge-val-corr">—</span>
+            </div>
+            <span class="gauge-label">CORR</span>
+            <span class="gauge-sub">BTC Correlation</span>
+          </div>
+          <div class="signal-gauge" id="gauge-fund">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                <circle class="gauge-fill" cx="50" cy="50" r="40" id="gauge-fill-fund" />
+              </svg>
+              <span class="gauge-value" id="gauge-val-fund">—</span>
+            </div>
+            <span class="gauge-label">FUND</span>
+            <span class="gauge-sub">Funding Rate</span>
+          </div>
+          <div class="signal-gauge" id="gauge-vp">
+            <div class="gauge-ring">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="40" />
+                <circle class="gauge-fill" cx="50" cy="50" r="40" id="gauge-fill-vp" />
+              </svg>
+              <span class="gauge-value" id="gauge-val-vp">—</span>
+            </div>
+            <span class="gauge-label">VP</span>
+            <span class="gauge-sub">Volume Profile</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Row 3: Scan Log ─────────────────────────────── -->
+    <!-- ── Row 3: Feeds + Scan Log ────────────────────── -->
+    <section class="row row-bottom">
+      <div class="card card-feeds">
+        <div class="card-header">
+          <span class="card-icon">🔗</span>
+          <span class="card-title">Data Feeds</span>
+        </div>
+        <div class="feeds-list">
+          <!-- Hyperliquid -->
+          <div class="feed-item">
+            <div class="feed-dot feed-dot-active" id="feed-dot-hl"></div>
+            <span class="feed-name">Hyperliquid WS</span>
+            <span class="feed-detail">Primary</span>
+          </div>
+          <!-- Binance -->
+          <div class="feed-item">
+            <div class="feed-dot feed-dot-active" id="feed-dot-bn"></div>
+            <span class="feed-name">Binance WS</span>
+            <span class="feed-detail">Reference</span>
+          </div>
+
+          <div class="feed-separator"></div>
+
+          <div class="feed-header-row">
+            <span>Asset</span>
+            <span>HL Trades</span>
+            <span>BN Trades</span>
+          </div>
+
+          <div class="feed-stat">
+            <span>ETH</span>
+            <span class="feed-count" id="feed-count-eth">0</span>
+            <span class="feed-count-ref" id="feed-count-eth-bn">0</span>
+          </div>
+          <div class="feed-stat">
+            <span>BTC</span>
+            <span class="feed-count" id="feed-count-btc">0</span>
+            <span class="feed-count-ref" id="feed-count-btc-bn">0</span>
+          </div>
+          <div class="feed-stat">
+            <span>SOL</span>
+            <span class="feed-count" id="feed-count-sol">0</span>
+            <span class="feed-count-ref" id="feed-count-sol-bn">0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card card-log">
+        <div class="card-header">
+          <span class="card-icon">📋</span>
+          <span class="card-title">Scan Log</span>
+          <span class="tag tag-count" id="log-count">0 scans</span>
+        </div>
+        <div class="log-table-wrap">
+          <table class="log-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Asset</th>
+                <th>Action</th>
+                <th>MTF</th>
+                <th>OFI</th>
+                <th>LVN</th>
+                <th>Price</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody id="log-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js?v=5"></script>
+</body>
+
+</html>

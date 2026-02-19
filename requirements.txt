@@ -1,0 +1,28 @@
+# Core
+loguru>=0.7.0
+python-dotenv>=1.0.0
+numpy>=1.26.0
+pandas>=2.0.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Venue SDKs (install what you use)
+hyperliquid-python-sdk>=0.6.0    # Hyperliquid (recommended first venue)
+# python-binance>=1.0.19         # Binance Futures (uncomment if using Binance)
+
+# Web API / Dashboard
+fastapi
+uvicorn
+jinja2
+aiofiles
+
+# Monitoring
+aiohttp>=3.9.0                   # Telegram bot transport
+httpx>=0.27.0
+
+# Dashboard
+# (uses stdlib http.server — no extra deps required)
+
+# Dev & testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
