@@ -408,6 +408,7 @@ def _reconcile_orphan_trades():
     Prop Desk: On startup, find trades with entry but no exit (crash survivors).
     Mark them as ORPHAN_CLOSE to prevent dataset corruption.
     """
+    import os
     import pandas as pd
     log_path = "data/trade_features.csv"
     if not os.path.exists(log_path):
