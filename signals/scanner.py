@@ -18,6 +18,7 @@ from loguru import logger
 from config import (
     SYMBOLS, MIN_SCORE, MIN_EDGE_BY_REGIME,
     ATR_WINDOW_SECONDS,
+    TAKER_FEE, TOTAL_FRICTION_PCT, MIN_EXPECTED_MOVE_PCT,
 )
 from data.buffer import buffer
 from execution.fee_model import compute_edge, min_edge_for_regime
@@ -368,6 +369,43 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
     if edge['net'] < min_edge:
         return _skip(symbol, f'Edge {edge["net"]:.4f} < threshold {min_edge:.4f}', t0)
 
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ── GATE 1: Minimum Expected Move Filter (ChatGPT Audit Fix) ─────
+    # Only trade if ATR-implied expected move > minimum threshold
+    # Prevents entering micro-noise trades where TP < friction
+    expected_move_pct = (atr / mark) if mark > 0 and atr > 0 else 0.0
+    if expected_move_pct < MIN_EXPECTED_MOVE_PCT:
+        return _skip(
+            symbol,
+            f'Expected move {expected_move_pct:.4%} < min {MIN_EXPECTED_MOVE_PCT:.4%} (ATR too tight)',
+            t0,
+        )
+
+    # ── GATE 2: EV Friction Gate ─────────────────────────────────────
+    # Expected move must exceed total execution friction
+    # Otherwise even winning trades are negative EV
+    if expected_move_pct < TOTAL_FRICTION_PCT * 1.5:
+        return _skip(
+            symbol,
+            f'Move {expected_move_pct:.4%} < friction×1.5 {TOTAL_FRICTION_PCT * 1.5:.4%} (negative EV)',
+            t0,
+        )
+
+    # ── GATE 3: Volatility Expansion Gate ────────────────────────────
+    # In LOW regime, REQUIRE vol expansion — avoid chop regime entries
+    if regime == 'LOW' and not vol_expanding:
+        return _skip(
+            symbol,
+            f'LOW regime + vol contracting → skip chop (need expansion)',
+            t0,
+        )
+
+    logger.info(
+        f'[SCAN] {symbol} PASSED ALL GATES | move={expected_move_pct:.4%} | '
+        f'friction={TOTAL_FRICTION_PCT:.4%} | vol_exp={vol_expanding} | regime={regime}'
+    )
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
     # ── Determine OFI/CVD trend for exit monitoring ──────────────────
     ofi_direction = of.get('direction', 'neutral') 
     cvd_trend     = cvd.get('trend', 'neutral')        
@@ -378,8 +416,9 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
         'direction': direction,
         'score': f'{tqs:.0f}',  # Return TQS as score for display
         'legacy_score': legacy_score,
-        'reason': f'TQS {tqs:.0f}/100, edge {edge["net"]:.4f}',
+        'reason': f'TQS {tqs:.0f}/100, edge {edge["net"]:.4f}, move {expected_move_pct:.4%}',
         'net_edge': edge['net'],
+        'expected_move_pct': expected_move_pct,
         'mark_price': mark,
         'spread': spread,
         'atr': round(atr, 4),

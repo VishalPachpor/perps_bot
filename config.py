@@ -37,6 +37,12 @@ MAKER_FEE = {
     'bybit':        0.00010,  # 0.01%
 }.get(VENUE, 0.00000)
 
+# ── Execution Friction Model (ChatGPT Audit Fix) ────────────────────
+# Only trade when expected move > total execution friction
+# Prevents negative EV trades where TP < round-trip costs
+TOTAL_FRICTION_PCT    = float(os.getenv('TOTAL_FRICTION_PCT', '0.0011'))     # 0.11% (fees + spread + slippage)
+MIN_EXPECTED_MOVE_PCT = float(os.getenv('MIN_EXPECTED_MOVE_PCT', '0.0015'))  # 0.15% minimum expected move
+
 # ── Edge Thresholds (regime-aware, replaces static 4% from Polymarket) ──
 # Rationale: perps fees ~0.035–0.05% vs Polymarket 1–2%
 MIN_EDGE_BY_REGIME = {
