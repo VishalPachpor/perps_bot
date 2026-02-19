@@ -373,6 +373,9 @@ def _start_dashboard_server(port: int):
 async def main():
     logger.info(f"Starting Perps Bot — {PAPER_TRADE=}")
     logger.info(f"Market: Hyperliquid | Symbols: {SYMBOLS}")
+
+    # ── Prop Desk: Orphan Trade Reconciliation ────────────────────────
+    _reconcile_orphan_trades()
     
     # Start Dashboard
     dash_port = 8081
@@ -398,6 +401,33 @@ async def main():
         _poll_funding(),
         _adaptive_learning_loop(), # Add learning loop
     )
+
+
+def _reconcile_orphan_trades():
+    """
+    Prop Desk: On startup, find trades with entry but no exit (crash survivors).
+    Mark them as ORPHAN_CLOSE to prevent dataset corruption.
+    """
+    import pandas as pd
+    log_path = "data/trade_features.csv"
+    if not os.path.exists(log_path):
+        return
+
+    try:
+        df = pd.read_csv(log_path)
+        orphans = df['result_r'].isna()
+        n_orphans = orphans.sum()
+
+        if n_orphans > 0:
+            df.loc[orphans, 'exit_reason'] = 'ORPHAN_CLOSE'
+            df.loc[orphans, 'result_r'] = 0.0  # Neutral — don't corrupt learning
+            df.loc[orphans, 'hold_time'] = 0.0
+            df.to_csv(log_path, index=False)
+            logger.warning(f"[RECONCILE] Closed {n_orphans} orphan trade(s) from prior crash")
+        else:
+            logger.info("[RECONCILE] No orphan trades found — clean startup")
+    except Exception as e:
+        logger.error(f"[RECONCILE] Failed: {e}")
 
 
 if __name__ == '__main__':

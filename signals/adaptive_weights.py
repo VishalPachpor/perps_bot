@@ -106,6 +106,8 @@ def _factor_quality_score(df: pd.DataFrame, factor: str) -> float:
       - Edge magnitude (mean R when factor is strong)
       - Edge consistency (low std = reliable)
       - Downside risk (penalize large losses even when factor looks good)
+
+    Prop Desk: Uses recency-weighted means if available.
     """
     col = df[factor]
     if col.std() < 1e-9:
@@ -115,16 +117,25 @@ def _factor_quality_score(df: pd.DataFrame, factor: str) -> float:
     if bins.nunique() < 2:
         return 0.0
 
-    grouped = df.groupby(bins)["result_r"]
-
-    mean_r = grouped.mean()
-    std_r = grouped.std().replace(0, np.nan).fillna(1e-6)
+    # Prop Desk: Recency-weighted grouped statistics
+    has_recency = '_recency_weight' in df.columns
+    if has_recency:
+        # Weighted mean per bin
+        weighted_df = df.assign(_bin=bins)
+        mean_r = weighted_df.groupby('_bin').apply(
+            lambda g: np.average(g['result_r'], weights=g['_recency_weight'])
+            if len(g) > 0 else 0.0
+        )
+        std_r = weighted_df.groupby('_bin')['result_r'].std().replace(0, np.nan).fillna(1e-6)
+    else:
+        grouped = df.groupby(bins)["result_r"]
+        mean_r = grouped.mean()
+        std_r = grouped.std().replace(0, np.nan).fillna(1e-6)
 
     # Sharpe-style: edge / volatility
     sharpe = mean_r / std_r
 
     # Downside penalty: worst loss in the top quintile
-    # (when factor is "strong", do we still get blown up?)
     penalty = _downside_penalty(df, factor)
 
     # FQS = best bin Sharpe - penalty
@@ -215,6 +226,25 @@ def update_weights() -> dict:
 
     # Rolling window
     df = df.tail(WINDOW)
+
+    # ── Prop Desk: Recency Weighting ─────────────────────────────────
+    # Recent trades matter more. Decay old trade influence.
+    if 'timestamp' in df.columns:
+        try:
+            ts = pd.to_datetime(df['timestamp'], errors='coerce')
+            now = pd.Timestamp.now()
+            hours_ago = (now - ts).dt.total_seconds() / 3600
+            # <24h → 2.0x, <7d → 1.0x, >7d → 0.5x
+            recency_w = np.where(hours_ago < 24, 2.0,
+                        np.where(hours_ago < 168, 1.0, 0.5))
+            df = df.copy()
+            df['_recency_weight'] = recency_w
+        except Exception:
+            df = df.copy()
+            df['_recency_weight'] = 1.0
+    else:
+        df = df.copy()
+        df['_recency_weight'] = 1.0
     
     # Calc dynamic smoothing alpha based on R-volatility
     # If results are stable, learn faster (0.35). If chaotic, slow down (0.15).

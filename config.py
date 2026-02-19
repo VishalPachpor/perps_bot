@@ -21,7 +21,7 @@ MAX_LEVERAGE          = int(os.getenv('MAX_LEVERAGE', '3'))         # hard cap, 
 MAX_POSITION_FRACTION = float(os.getenv('MAX_POSITION_FRACTION', '0.10'))  # 10% max per trade
 RISK_PER_TRADE_PCT    = float(os.getenv('RISK_PER_TRADE_PCT', '0.01'))    # 1% risk per trade
 MAX_NOTIONAL_PCT      = float(os.getenv('MAX_NOTIONAL_PCT', '0.60'))       # 60% notional (allows leverage)
-MAX_NET_DIRECTIONAL   = float(os.getenv('MAX_NET_DIRECTIONAL', '0.40'))    # 40% net long/short
+MAX_NET_DIRECTIONAL   = float(os.getenv('MAX_NET_DIRECTIONAL', '0.25'))    # 25% net long/short (correlation shock limiter)
 
 # ── Perps Fee Model ──────────────────────────────────────────────────
 # Taker fees by venue (round-trip = fee × 2)
