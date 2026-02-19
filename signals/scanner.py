@@ -177,7 +177,9 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
         fund = buffer.get_funding(symbol)
         session = get_session()
 
-        trades_raw = list(buffer.get_trades(symbol))
+        # Cap to last 2000 trades — enough for 15-min CVD window,
+        # avoids iterating full 10k-entry deque for BTC every scan cycle.
+        trades_raw = list(buffer.get_trades(symbol))[-2000:]
         cvd = compute_cvd(trades_raw, window_seconds=900)
 
     except ImportError as e:
