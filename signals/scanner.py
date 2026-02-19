@@ -22,6 +22,7 @@ from config import (
 )
 from data.buffer import buffer
 from execution.fee_model import compute_edge, min_edge_for_regime
+from signals.ignition import detect_ignition
 
 
 def compute_atr(symbol: str, window_seconds: int = ATR_WINDOW_SECONDS) -> float:
@@ -404,6 +405,18 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
         f'[SCAN] {symbol} PASSED ALL GATES | move={expected_move_pct:.4%} | '
         f'friction={TOTAL_FRICTION_PCT:.4%} | vol_exp={vol_expanding} | regime={regime}'
     )
+
+    # ── Momentum Ignition Detection ──────────────────────────────────
+    ignition = detect_ignition(
+        sweep_val=sweep_val,
+        cvd_val=cvd_val,
+        liquidity_val=liquidity_val,
+        vol_val=vol_val,
+        corr_val=corr_val,
+        vol_expanding=vol_expanding,
+        regime=regime,
+        symbol=symbol,
+    )
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     # ── Determine OFI/CVD trend for exit monitoring ──────────────────
@@ -432,6 +445,13 @@ def run_scan(symbol: str, regime: str = 'NORMAL') -> dict:
         'sweep_depth': ms.get('sweep_magnitude', 0.0) if ms.get('sweep_detected') else 0.0,
         'cycle_ms': round((time.time() - t0) * 1000, 1),
         'raw_factors': raw_factors,  # <--- CRITICAL for logging
+        # ── Ignition Layer ───────────────────────────────────────
+        'ignition': ignition.is_ignition,
+        'ignition_score': ignition.score,
+        'ignition_factors': ignition.factors,
+        'tp_multiplier': ignition.tp_multiplier,
+        'size_multiplier': ignition.size_multiplier,
+        'runner_enabled': ignition.runner_enabled,
         **signal_data,
     }
 

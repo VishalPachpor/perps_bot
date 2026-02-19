@@ -159,6 +159,7 @@ class PositionManager:
         funding_rate: float = 0.0,
         spread: float = 0.0,
         sweep_depth: float = 0.0,
+        tp_multiplier: float = 1.0,
     ) -> Optional[str]:
         """
         Register a new open position and compute all trigger levels.
@@ -203,6 +204,11 @@ class PositionManager:
         # Ensure TP clears worst-case round-trip execution costs + slippage buffer
         min_tp_dist = entry_price * (TAKER_FEE * 3.0)
         tp_dist = max(sl_dist * MIN_RR_RATIO, min_tp_dist)
+
+        # Apply ignition TP expansion
+        if tp_multiplier > 1.0:
+            tp_dist *= tp_multiplier
+            logger.info(f'[PM] IGNITION TP expansion: {tp_multiplier:.1f}x → tp_dist={tp_dist:.4f}')
 
         if direction == 'long':
             sl_price  = entry_price - sl_dist

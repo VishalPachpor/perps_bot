@@ -143,6 +143,7 @@ async def execute_and_register_trade(symbol, direction, size_usd, mark_price, at
             session=scan_data.get('session', ''),
             funding_rate=scan_data.get('funding_rate', 0.0),
             sweep_depth=scan_data.get('sweep_depth', 0.0),
+            tp_multiplier=scan_data.get('tp_multiplier', 1.0),
         )
 
         if not pos_id:
@@ -316,11 +317,12 @@ async def scan_and_execute():
                         asset=symbol,
                     )
 
-                # ── Log scan result ──────────────────────────────────
+                # ── Log scan result ──────────────────────────────────────
                 reason_short = scan.get('reason', '')[:60]
+                ignition_tag = ' 🔥IGNITION' if scan.get('ignition') else ''
                 logger.info(
                     f'[SCAN] {symbol} | trade={scan["trade"]} | '
-                    f'score={scan["score"]} | {reason_short}'
+                    f'score={scan["score"]}{ignition_tag} | {reason_short}'
                 )
 
                 if not scan.get('trade'):
@@ -348,6 +350,12 @@ async def scan_and_execute():
                     leverage=MAX_LEVERAGE,
                     depth_scalar=regime_mult * session_mult,
                 )
+
+                # ── Ignition size scaling ───────────────────────────
+                ignition_size_mult = scan.get('size_multiplier', 1.0)
+                if ignition_size_mult > 1.0:
+                    logger.info(f'[EXEC] {symbol} IGNITION size scale: {ignition_size_mult:.1f}x')
+                size_usd *= ignition_size_mult
 
                 if size_usd < 5.0:
                     logger.debug(f'[EXEC] {symbol} size ${size_usd:.2f} too small — skip')
