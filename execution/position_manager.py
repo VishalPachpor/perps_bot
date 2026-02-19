@@ -61,6 +61,7 @@ from typing import Optional
 from loguru import logger
 
 from execution.risk import risk_manager, vol_monitor
+from config import MAX_NET_DIRECTIONAL, BANKROLL
 
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -69,7 +70,7 @@ TRAILING_ACTIVATE_PCT   = 0.004  # activate trailing at +0.4% profit
 TRAILING_LOCK_PCT       = 0.50   # lock in 50% of peak profit
 MIN_RR_RATIO            = 1.5    # minimum reward:risk at entry
 MAX_LEVERAGE            = 5      # absolute cap — never exceed
-MAX_NET_DIRECTIONAL_EXP = 0.12   # 12% of bankroll net long or short
+MAX_NET_DIRECTIONAL_EXP = MAX_NET_DIRECTIONAL  # From config.py (25%), was hardcoded 12%
 FAILURE_LOG_PATH        = os.path.join(
     os.path.dirname(__file__), '..', 'data', 'failure_patterns.jsonl'
 )
@@ -135,7 +136,7 @@ class PositionManager:
     exchange order, then calls open_position() / close_position().
     """
 
-    def __init__(self, bankroll: float = 1000.0):
+    def __init__(self, bankroll: float = BANKROLL):
         self.bankroll = bankroll
         self.positions: dict[str, PerpPosition] = {}  # pos_id → PerpPosition
         self._counter = 0
